@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Output directories (runtime artifacts)
+output/raw_texts/
+output/excluded/
+output/*.csv
+output/*.jsonl
+output/*.json
+output/*.xlsx
+output/*.txt
+output/*.yaml
+output/*.yml
+
+# Checkpoints (runtime)
+checkpoints/*.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# User research data (not part of the skill package)
+参考案例/
+宪法学结课论文/
+
+# Keep directory structures
+!output/.gitkeep
+!output/raw_texts/.gitkeep
+!output/excluded/.gitkeep
+!checkpoints/.gitkeep

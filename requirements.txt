@@ -1,0 +1,20 @@
+# Core dependencies for 裁判文书实证研究 skills
+# Install: pip install -r requirements.txt
+
+# Data processing
+pandas>=1.5.0
+openpyxl>=3.0.0
+pyyaml>=6.0
+
+# Document processing
+python-docx>=0.8.11
+
+# PDF processing (for literature distillation)
+pdfplumber>=0.7.0
+
+# Utilities
+tqdm>=4.64.0
+chardet>=5.0.0
+
+# Statistical analysis (for EDA in generate-factors)
+scipy>=1.9.0
