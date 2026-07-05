@@ -99,11 +99,16 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Edit, Agent, Workflow, Skill, Task
 字段定义自动采用标准格式：
 ```yaml
 - name: "字段名"
-  type: "open_text | categorical | binary | date | text_copy"
+  type: "open_text | categorical | binary | date | text_copy | numeric"
   source_sections: ["facts | reasoning | judgment | header"]
   description: "字段说明"
   validation: None or {method: "regex", pattern: "..."} or {values: [...]}
 ```
+
+**全局格式规范**（所有字段必须遵守）：
+- **比例/程度/强度**：全部使用小数（0-1），如 60% → `0.6`，100% → `1.0`
+- **日期**：统一 `YYYY-MM-DD`（连字符），如 `2026-01-08`
+- **二进制**：整数 `0` 或 `1`
 
 ### 阶段 4：清洗规则确认
 
@@ -149,11 +154,19 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Edit, Agent, Workflow, Skill, Task
 
 1. **格式转化** → Skill: `doc-converter`
 2. **数据清洗** → Skill: `data-cleaner`
-3. **信息抽取**（先试点 5 份，确认后再批量） → Skill: `info-extractor`
+3. **信息抽取**（先试点 5 份，确认后再用 Workflow 批量） → Skill: `info-extractor`
 4. **标签统一** → Skill: `label-unifier`
 5. **质量检验** → Skill: `quality-checker`
 
 每步完成后自动汇报结果，确认后再进入下一步。
+
+⚡ **生命周期管理规则**：
+
+1. **批量抽取必须用 Workflow**（非裸 Agent 集群）— Workflow 结束时自动终止所有子 Agent
+2. **结果优先**：当各批次 Agent 的结果文件已落盘且总数达标（例如 188/188），
+   立即合并推进下一步，不等待慢 Agent 的 task-notification
+3. **及时止损**：用 `TaskStop(task_id="<agent_id>")` 终止仍在跑的冗余 Agent
+4. **失败重试**：个别批次失败不要重抽全部，用 checkpoint 只补缺失部分
 
 ## 配置自动生成
 

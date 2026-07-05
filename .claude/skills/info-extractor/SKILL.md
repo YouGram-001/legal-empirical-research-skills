@@ -3,7 +3,7 @@ name: info-extractor
 description: >
   从裁判文书中批量抽取结构化信息。当用户提起以下关键词时触发：信息抽取、
   提取字段、批量提取、结构化数据、抽取关键信息、填充数据表、生成变量。
-  使用 Agent 集群并行处理，结合规则校验确保准确性。支持断点续传。
+  使用 Workflow 并行处理，自动生命周期管理，支持断点续传。
 argument-hint: "[cleaned_index.csv路径]"
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, Agent, Workflow, TaskCreate
@@ -13,7 +13,12 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent, Workflow, TaskCreate
 
 从清洗后的裁判文书中逐案提取结构化字段，生成 `extracted_raw.csv`。
 
-核心策略：**Agent 集群并行抽取 + 规则化后校验**。
+核心策略：**Workflow pipeline 并行抽取 + 自动生命周期管理 + 规则化后校验**。
+
+## 与旧版的关键区别
+
+**旧版**：裸 Agent 集群手动分批 → Agent 可能在主进程完成后仍然运行，浪费 token。
+**新版**：Workflow 编排 → 所有子 Agent 的生命周期由 Workflow 管理，Workflow 结束 = 全部 Agent 自动终止。
 
 ## 触发条件
 
@@ -21,7 +26,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent, Workflow, TaskCreate
 - "生成数据表"、"填充字段"
 - "结构化数据抽取"
 
-## 抽取流程（三步走）
+## 抽取流程
 
 ### Step 1: 准备文本块 → `prepare_chunks.py`
 
@@ -38,113 +43,125 @@ python .claude/skills/info-extractor/scripts/prepare_chunks.py \
 ### Step 2: 确认字段 Schema
 
 从对话历史或 `research_config.yaml` 获取待抽取的字段列表。
-如果用户是新项目且未配置字段，主动引导：
+如果用户是新项目且未配置字段，主动引导确认。
 
-```
-这个研究需要从文书中提取哪些字段？我建议以下分类：
+### Step 3: 试点抽取（5 份）→ 必须执行
 
-[客观字段 — 正则可自动提取]
-  案号、审理法院、审结日期、审级、案由
+**重要：在大规模抽取前，先抽取 5 份试点并展示给用户确认。**
 
-[分类标签 — 需从文本理解]
-  地区（省份）、是否省会、当事人性别
+直接在主对话中读取 `output/chunks.jsonl` 的前 5 条，用 Agent 逐条抽取，
+展示结果 → 用户确认字段定义和抽取质量 → 调整 Schema。
 
-[二分类标签 — 需配合关键词交叉验证]
-  是否涉及性别歧视、是否涉及城乡歧视、
-  法院是否认定歧视存在、是否额外补偿
+### Step 4: 批量抽取 → 使用 Workflow
 
-[开放文本 — Agent 逐案独立总结]
-  事件（纠纷概述）、主张存在歧视的领域、
-  裁判要点、当事人援引法律、法院援引法律
+用户确认试点后，**使用 Workflow 工具**启动批量抽取。
 
-你希望增减或修改哪些字段？
-```
+#### Workflow 脚本模板
 
-### Step 3: 试点抽取（5 份）
+```javascript
+export const meta = {
+  name: 'batch-extraction',
+  description: '批量抽取裁判文书结构化字段',
+  phases: [
+    { title: '抽取', detail: 'pipeline 并行抽取全部文档' },
+    { title: '校验', detail: '规则校验 + 标记冲突' },
+  ],
+}
 
-**重要**：在大规模抽取前，先抽取 5 份作为试点并展示给用户确认。
+// 从 chunks.jsonl 读取全部文档
+const fs = require('fs')
+const chunks = JSON.parse(fs.readFileSync('output/chunks.jsonl', 'utf-8'))
+  .map(c => JSON.parse(c))
+// 如果有 checkpoint，只取未完成的
+const completed = loadCheckpoint()  // 从 checkpoints/extraction_progress.json 读取
+const pending = chunks.filter(c => !completed.includes(c.案件ID))
 
-1. 读取 `output/chunks.jsonl` 的前 5 条
-2. 对每条，用 Agent 抽取（不使用 Workflow，直接在对话中进行）
-3. 展示抽取结果 → 用户确认字段定义、抽取质量
-4. 根据反馈调整 Schema 或 prompt
+if (pending.length === 0) {
+  log('全部文档已完成，跳过抽取。')
+  return { allDone: true }
+}
 
-示例 Agent 指令：
+log(`待抽取: ${pending.length} 份 (共 ${chunks.length} 份，已完成 ${completed.length})`)
 
-```
-从以下裁判文书关键段落中提取结构化信息。
+phase('抽取')
 
-{案件的 agent_input 文本}
+// pipeline: 每份文档独立推进，一份完成立即保存，不等待其他
+const results = await pipeline(
+  pending,
+  (chunk) => agent(
+    `从以下裁判文书关键段落中提取结构化信息。
+
+${chunk.agent_input}
 
 请提取以下字段，输出纯 JSON：
+{
+  "案号": "...",
+  "审理法院": "...",
+  "审级": "一审/二审/再审",
+  ...（字段列表从 research_config.yaml 读取）
+}
 
-事件: 一句话概述案件核心纠纷（不超过 100 字）
-地区: 审理法院所在省/自治区/直辖市（从法院名称提取即可）
-当事人性别: "男"/"女"/null（从当事人姓名和文本描述判断）
-是否涉及性别歧视: 1/0（当事人是否主张性别歧视）
-法院是否支持当事人主张: 1/0
+格式规范：
+- 所有比例/程度/强度字段使用小数（0-1），如 60% → 0.6，10% → 0.1
+- 所有日期字段统一为 YYYY-MM-DD（连字符，非点号），如 2026-01-08
+- 二进制字段使用整数 0 或 1
 
-重要原则:
-1. 只基于原文内容，不得推断或编造
+原则：
+1. 严格基于原文，不得推断或编造
 2. 无法确定的值输出 null
-3. 只输出 JSON，不要其他文字
+3. 只输出 JSON，不要其他文字`,
+    {
+      label: `extract:${chunk.案件ID}`,
+      phase: '抽取',
+      schema: EXTRACTION_SCHEMA,  // 从 research_config.yaml 构建
+    }
+  ).then(result => {
+    // 每个文档抽取完成后立即保存 checkpoint
+    saveCheckpoint(chunk.案件ID, result)
+    return result
+  })
+)
+
+phase('校验')
+const validated = await agent(
+  `对以下 ${results.length} 条抽取结果进行规则校验...`,
+  { label: 'validate', phase: '校验' }
+)
+
+return { results: validated.filter(Boolean), total: chunks.length, extracted: results.length }
 ```
 
-### Step 4: 批量抽取（Workflow 编排）
+#### 关键优势
 
-用户确认试点结果后，启动批量抽取。
+- **自动清理**：Workflow 结束时，所有 pipeline 子 Agent 立即终止 — 不会泄漏
+- **pipeline 模式**：文档 A 在校验阶段时，文档 B 可能还在抽取 — 最大化并行
+- **checkpoint**：每个文档抽取完立即落盘，中断后可续传
+- **进度可见**：`/workflows` 命令实时查看每个文档的抽取进度
 
-**分批策略**：
-- 每批 10 份文书
-- 每批内 3-5 个 Agent 并行
-- 每批完成后自动保存 checkpoint
-- 支持断点续传（中断后可继续）
-
-**编排方式**：使用 Skill 调用 Workflow 工具，或直接在对话中分批循环：
-
-```
-现在开始批量抽取。
-
-第 1/29 批 (1-10):
-  [Agent 1] 抽取 C001-C003
-  [Agent 2] 抽取 C004-C006
-  [Agent 3] 抽取 C007-C010
-  → 校验 → 保存 checkpoint
-
-第 2/29 批 (11-20):
-  ...
-```
-
-### Step 5: 结果校验 → `validate_extraction.py`
-
-所有抽取完成后，运行规则校验：
+### Step 5: 结果合并 → CSV
 
 ```bash
-python .claude/skills/info-extractor/scripts/validate_extraction.py \
-  --input output/extracted_raw.jsonl \
-  --output output/extracted_validated.csv
+python -c "
+import json, csv, glob
+records = []
+for f in glob.glob('checkpoints/extraction_*.json'):
+    with open(f) as fp:
+        records.append(json.load(fp))
+with open('output/extracted_raw.csv', 'w', newline='') as f:
+    writer = csv.DictWriter(f, fieldnames=records[0].keys())
+    writer.writeheader()
+    writer.writerows(records)
+print(f'Merged {len(records)} records → output/extracted_raw.csv')
+"
 ```
-
-校验规则：
-- **案号/日期/法院名**：正则格式验证
-- **省份**：标准省份列表匹配
-- **二分类标签**：关键词交叉验证（如"是否涉及性别歧视"字段，Agent 判定为 0 但文本中出现"妇女"→ 标记冲突）
-- **分类字段**：值必须在允许集合中
-
-校验结果：
-- 冲突项标记为 `REVIEW_NEEDED`
-- 汇总展示 → 用户裁定 → 批量处理
 
 ### Step 6: 汇报结果
 
 ```
 信息抽取完成！
-  - 总计: 286 份
-  - 成功: 280 份
-  - 需人工复核: 12 处冲突
-  - 已保存: output/extracted_validated.csv
-
-需要我展示冲突条目供你裁定吗？
+  - 总计: 188 份
+  - 成功: 188 份
+  - 已保存: output/extracted_raw.csv
 ```
 
 ## Agent 抽取 Prompt 模板
@@ -170,16 +187,21 @@ python .claude/skills/info-extractor/scripts/validate_extraction.py \
 3. 开放文本字段独立总结，不使用模板
 ```
 
-## 大规模处理注意事项
+## 生命周期管理规则
 
-- **Token 消耗**：每份文书 Agent 输入约 3600 字（~1000-1500 tokens），286 份总计约 300K-400K tokens
-- **时间估算**：每批 10 份约需 60-90 秒，286 份约需 30-45 分钟
-- **断点续传**：checkpoint 自动保存在 `checkpoints/extraction_progress.json`
-- **中断恢复**：下次触发时自动检测 checkpoint，从未完成的案件继续
+⚡ **重要：防止 Agent 泄漏**
+
+1. **优先 Workflow**：批量抽取必须用 Workflow，不得用裸 Agent 集群
+2. **及时止损**：当主进程已拿到足够数据推进下一步时，如果还有 Agent 在运行：
+   - 用 `TaskStop(task_id="<agent_id>")` 终止不需要的 Agent
+   - 不要等待它们自然完成
+3. **结果优先**：当各 Agent 的结果文件已落盘、总和达到目标数量时，立即合并推进，
+   不要等待所有 Agent 的 task-notification
+4. **失败重试**：个别 Agent 超时或失败，用 checkpoint 只补抽缺失文档，
+   不要重新抽全部
 
 ## 输出
 
 - `output/chunks.jsonl` — 预处理后的文本块
-- `output/extracted_raw.jsonl` — Agent 原始抽取结果（JSONL）
-- `output/extracted_validated.csv` — 校验后的数据表（含 REVIEW_NEEDED 标记）
+- `output/extracted_raw.csv` — 最终结构化数据表
 - `checkpoints/extraction_progress.json` — 断点续传进度

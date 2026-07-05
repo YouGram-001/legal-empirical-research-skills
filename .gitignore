@@ -33,9 +33,11 @@ Thumbs.db
 # User research data (not part of the skill package)
 参考案例/
 宪法学结课论文/
+裁判文书/
 
 # Keep directory structures
 !output/.gitkeep
 !output/raw_texts/.gitkeep
 !output/excluded/.gitkeep
 !checkpoints/.gitkeep
+!output/batches/.gitkeep
