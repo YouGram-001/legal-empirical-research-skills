@@ -2,6 +2,8 @@
 
 一个**对话驱动**的法学实证研究工具包。在 Claude Code 中用自然语言处理、清洗、结构化大量裁判文书（.doc/.docx），最终输出可直接用于统计分析和回归建模的 CSV 数据表。
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 ## 快速开始
 
 ### 1. 安装 Claude Code
