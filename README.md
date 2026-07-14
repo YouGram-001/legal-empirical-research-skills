@@ -293,4 +293,5 @@ Skill 每批处理完自动保存 checkpoint。下次触发时自动检测并从
 
 ## 许可
 
-MIT License
+GPL v3
+-**copyleft**：使用此开源项目的**衍生作品也必须以相同许可证开源**
